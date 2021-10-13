@@ -1,0 +1,5 @@
+name: "CODEOWNERS Bot"
+description: "Assemble many CODEOWNERS files into one"
+runs:
+  using: "docker"
+  image: "Dockerfile"
