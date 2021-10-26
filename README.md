@@ -17,14 +17,14 @@ This file tends to get messy and outdated in large repos with many contributors,
 
 With this tool these files can instead be placed into the directories to which they refer:
 
-```
+```gitignore
 # File: CODEOWNERS
 # Root CODEOWNERS file that sets the default owner of everything in this repo
 
 @org/admin-user  # No glob required here, target is taken from the location of this CODEOWNERS file
 ```
 
-```
+```gitignore
 # File: src/go/CODEOWNERS
 # Tiny nested file that sets the owner of everything under src/go
 
