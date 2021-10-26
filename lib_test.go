@@ -55,6 +55,12 @@ go.mod @org/gopher
 `
 	writeFile(t, repoPath, "CODEOWNERS", rootCOFile)
 
+	// Create a CODEOWNERS file in a hidden directory
+	hiddenDirCOFile := `
+ci.yaml @org/ci-admin
+`
+	writeFile(t, repoPath, ".github/workflows/CODEOWNERS", hiddenDirCOFile)
+
 	// Create a CODEOWNERS file in an ignored directory
 	ignoreFile := `
 /src/shouldBeIgnored
@@ -67,16 +73,24 @@ go.mod @org/gopher
 
 	// Test rule rewriting
 	expectedRules := []string{
+		// From /CODEOWNERS
 		"* @org/admin",
 		"/go.mod @org/gopher",
+
+		// From /.github/workflows/CODEOWNERS
+		"/.github/workflows/ci.yaml @org/ci-admin",
+
+		// From /src/dir1/CODEOWNERS
 		"/src/dir1 @org/user",
+
+		// From /src/dir2/CODEOWNERS
 		"/src/dir2 @org/user @singleUser email@server.com",
 		"/src/dir2/main.go @org/gopher",
 		"/src/dir2/package/nested.go @org/nestedUser",
 		"/src/dir2/*.js @org/frontend @fullstackUser",
 	}
 
-	rewrittenRules, err := walkRepo(repoPath)
+	rewrittenRules, err := RewriteCodeownersRules(repoPath)
 	require.NoError(t, err)
 	require.Equal(t, expectedRules, rewrittenRules)
 
@@ -85,6 +99,7 @@ go.mod @org/gopher
 
 * @org/admin
 /go.mod @org/gopher
+/.github/workflows/ci.yaml @org/ci-admin
 /src/dir1 @org/user
 /src/dir2 @org/user @singleUser email@server.com
 /src/dir2/main.go @org/gopher
@@ -92,7 +107,7 @@ go.mod @org/gopher
 /src/dir2/*.js @org/frontend @fullstackUser
 `
 
-	generatedFile := generateCodeownersFile(rewrittenRules)
+	generatedFile := GenerateCodeownersFile(rewrittenRules)
 	require.Equal(t, expectedFile, generatedFile)
 }
 
