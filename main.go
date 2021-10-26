@@ -5,57 +5,49 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 )
 
 func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	repoPath, err := parseRepoPath()
+	root, err := parseDir()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(fmt.Errorf("error while parsing root dir: %w", err))
 	}
 
-	rewrittenCodeownerRules, err := walkRepo(repoPath)
+	rewrittenCodeownerRules, err := RewriteCodeownersRules(root)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(fmt.Errorf("error while rewriting codeowner rules in %s: %w", root, err))
 	}
 
 	if len(rewrittenCodeownerRules) == 0 {
-		log.Fatal(fmt.Errorf("no CODEOWNER rules found"))
+		log.Fatal(fmt.Errorf("no CODEOWNER rules found in %s", root))
 	}
 
-	generatedCodeownersFile := generateCodeownersFile(rewrittenCodeownerRules)
+	generatedCodeownersFile := GenerateCodeownersFile(rewrittenCodeownerRules)
 
 	_, err = fmt.Printf(generatedCodeownersFile)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(fmt.Errorf("error while printing generated filed: %w", err))
 	}
 }
 
 func usage() {
-	_, err := fmt.Fprintf(flag.CommandLine.Output(), "usage: %s [repoPath]\n", os.Args[0])
+	_, err := fmt.Fprintf(flag.CommandLine.Output(), "usage: %s [dir]\n", os.Args[0])
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(fmt.Errorf("error while printing usage info: %w", err))
 	}
 }
 
-func parseRepoPath() (string, error) {
+func parseDir() (string, error) {
 	narg := flag.NArg()
-	if narg < 1 {
-		return "", fmt.Errorf("no repoPath given")
-	} else if narg > 1 {
-		return "", fmt.Errorf("can only process one repoPath at a time, got %d: %s", narg, flag.Args())
+	switch {
+	case narg < 1:
+		return "", fmt.Errorf("no dir given")
+	case narg > 1:
+		return "", fmt.Errorf("can only process one dir at a time, got %d: %s", narg, flag.Args())
+	default:
+		return flag.Arg(0), nil
 	}
-
-	repoPathArg := flag.Arg(0)
-
-	// Ensure we have an absolute path to start with
-	repoPath, err := filepath.Abs(repoPathArg)
-	if err != nil {
-		return "", fmt.Errorf("can't resolve repoPath path %s: %s", repoPathArg, err)
-	}
-
-	return repoPath, nil
 }

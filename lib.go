@@ -1,11 +1,13 @@
 package main
 
 import (
+	"container/list"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/denormal/go-gitignore"
@@ -18,46 +20,103 @@ const (
 	generatedFileWarning    = "# GENERATED FILE, DO NOT EDIT!"
 )
 
-// walkRepo visits every CODEOWNERS file under root and processed it for inclusion
-// in the output file. Respects .gitignore files. Returns the processed CODEOWNERS
-// rules in a slice.
-func walkRepo(root string) ([]string, error) {
-	var rewrittenRules []string
-
-	ignore := initGitignore(root)
-	generatedFilePath := filepath.Join(root, generatedFileName)
-
-	err := filepath.WalkDir(root,
-		func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return fmt.Errorf("error while visiting %s: %s", path, err)
-			}
-
-			if path == generatedFilePath { // Don't process the target file
-				return nil
-			}
-
-			if d.IsDir() && shouldIgnoreDir(ignore, path) {
-				return fs.SkipDir
-			}
-
-			if isCodeownersFile(d) {
-				rules, procErr := processCodeownersFile(root, path)
-				if procErr != nil {
-					return procErr
-				}
-
-				rewrittenRules = append(rewrittenRules, rules...)
-			}
-
-			return nil
-		})
-
+// validateRoot takes a path and constructs a root from it. The path will be resolved to a clean,
+// absolute path. If path doesn't represent a dir or can't be resolved for other reasons,
+// an error is returned.
+func validateRoot(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return rewrittenRules, fmt.Errorf("error while walking repo: %s", err)
+		return "", fmt.Errorf("error while resolving path %s: %w", path, err)
 	}
 
+	absPathInfo, err := os.Stat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("error while reading resolved path %s: %w", absPath, err)
+	}
+
+	if !absPathInfo.IsDir() {
+		return "", fmt.Errorf("resolved path %s is not a dir: %w", absPath, err)
+	}
+
+	return absPath, nil
+}
+
+// RewriteCodeownersRules visits every CODEOWNERS file under path (respecting .gitignore files
+// and rewrites its rules for inclusion in the root CO file.
+func RewriteCodeownersRules(path string) ([]string, error) {
+	root, err := validateRoot(path)
+	if err != nil {
+		return nil, fmt.Errorf("error while validating path %s: %w", path, err)
+	}
+
+	var rewrittenRules []string
+
+	err = walkCodeownersFiles(root, func(coPath string) error {
+		rules, procErr := processCodeownersFile(path, coPath)
+		if procErr != nil {
+			return procErr
+		}
+
+		rewrittenRules = append(rewrittenRules, rules...)
+		return nil
+	})
+
 	return rewrittenRules, nil
+}
+
+// procFn gets the path to a CODEOWNERS file and processes it.
+type procFn = func(coPath string) error
+
+// walkCodeownersFiles walks visits every CODEOWNERS file under root and calls
+// procFn with the files absolute path as argument.
+func walkCodeownersFiles(root string, procFn procFn) error {
+	ignore := initGitignore(root)
+
+	dirQueue := newStringQueue()
+	dirQueue.Enqueue(root)
+
+	for dirQueue.Len() > 0 {
+		currentDir := dirQueue.Dequeue()
+
+		if shouldIgnoreDir(ignore, currentDir) {
+			continue
+		}
+
+		dir, err := os.Open(currentDir)
+		if err != nil {
+			return fmt.Errorf("error while opening dir %s: %w", currentDir, err)
+		}
+
+		dirEntries, err := dir.ReadDir(-1)
+		dir.Close()
+		if err != nil {
+			return fmt.Errorf("error while reading dir %s: %w", currentDir, err)
+		}
+
+		// Ensure lexicographic order
+		sort.Slice(dirEntries, func(i, j int) bool { return dirEntries[i].Name() < dirEntries[j].Name() })
+
+		for _, dirEntry := range dirEntries {
+			if isCodeownersFile(dirEntry) {
+				path := filepath.Join(currentDir, dirEntry.Name())
+
+				// Skip the target file
+				if strings.HasSuffix(path, generatedFileName) {
+					continue
+				}
+
+				err = procFn(path)
+				if err != nil {
+					return err
+				}
+			} else if dirEntry.IsDir() {
+				dirEntryPath := filepath.Join(currentDir, dirEntry.Name())
+				dirQueue.Enqueue(dirEntryPath)
+			}
+		}
+	}
+
+	return nil
 }
 
 // initGitignore parses the .gitignore files under root, including nested ones.
@@ -70,6 +129,10 @@ func initGitignore(root string) gitignore.GitIgnore {
 
 // shouldIgnoreDir tests whether a dir should be ignored.
 func shouldIgnoreDir(ignore gitignore.GitIgnore, path string) bool {
+	if filepath.Base(path) == ".git" {
+		return true
+	}
+
 	if ignore == nil || ignore.Base() == path { // Don't ignore the root itself
 		return false
 	}
@@ -82,7 +145,7 @@ func shouldIgnoreDir(ignore gitignore.GitIgnore, path string) bool {
 	return false
 }
 
-// isCodeownersFile check whether a direntry is a CODEOWNERS file.
+// isCodeownersFile checks whether a direntry is a CODEOWNERS file.
 func isCodeownersFile(d fs.DirEntry) bool {
 	return !d.IsDir() && d.Name() == codeownersFileName
 }
@@ -94,10 +157,15 @@ func processCodeownersFile(root, path string) ([]string, error) {
 		return nil, err
 	}
 
+	rewrittenPath, err := rewriteCodeownersPath(root, path)
+	if err != nil {
+		return nil, err
+	}
+
 	var rewrittenRules []string
 	for _, line := range lines {
-		if isCodeownerRule(line) {
-			rewritten, err := rewriteCodeownerRule(root, path, line)
+		if isCodeownersRule(line) {
+			rewritten, err := rewriteCodeownersRule(rewrittenPath, line)
 			if err != nil {
 				return nil, err
 			}
@@ -116,46 +184,25 @@ func processCodeownersFile(root, path string) ([]string, error) {
 func readCodeownersFile(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("can't open CODEOWNERS file %s: %s", path, err)
+		return nil, fmt.Errorf("can't open CODEOWNERS file %s: %w", path, err)
 	}
 	defer file.Close()
 
 	bytes, err := io.ReadAll(file)
 	if err != nil {
-		return nil, fmt.Errorf("can't read CODEOWNERS file %s: %s", path, err)
+		return nil, fmt.Errorf("can't read CODEOWNERS file %s: %w", path, err)
 	}
 
 	content := string(bytes)
 	return strings.Split(content, "\n"), nil
 }
 
-// isCodeownerRule decides whether a line from a CO file should be processed.
-// It excludes whitespace and comment lines. It does not exclude wildcard patterns
-// like "*.go" even though they will likely lead to nonsensical results when included
-// in the root CO file.
-func isCodeownerRule(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	return trimmed != "" && !strings.HasPrefix(line, codeownersCommentPrefix)
-}
-
-// rewriteCodeownerRule rewrites a valid CO rule for inclusion in the root CO file.
-// It performs these transformations:
-//   - Directory ownership rules (i.e. just a GitHub user, group or email) are prepended
-//     with the CO files path absolute to the root: "@org/user" becomes
-//     "/path/to/dir @org/user"
-//   - File and glob ownership rules have the CO file path prepended to the file:
-//     "main.go @org/user" becomes "/path/to/dir/main.go @org/user"
-func rewriteCodeownerRule(root, path, rule string) (string, error) {
-	rewrittenPath, err := rewriteCodeownersPath(root, path)
-	if err != nil {
-		return "", err
-	}
-
-	if isDirRule(rule) {
-		return rewriteDirRule(rewrittenPath, rule), nil
-	} else {
-		return rewriteNonDirRule(rewrittenPath, rule), nil
-	}
+// isCodeownersRule decides whether a line from a CO file should be processed.
+// False for whitespace and comment lines.
+func isCodeownersRule(line string) bool {
+	isWhitespace := strings.TrimSpace(line) == ""
+	isComment := strings.HasPrefix(line, codeownersCommentPrefix)
+	return !isWhitespace && !isComment
 }
 
 // rewriteCodeownersPath takes the absolut path of a CO file and rewrites it
@@ -175,6 +222,21 @@ func rewriteCodeownersPath(root, path string) (string, error) {
 	return fmt.Sprintf("/%s", relDir), nil
 }
 
+// rewriteCodeownersRule rewrites a valid CO rule for inclusion in the root CO file.
+// It performs these transformations:
+//   - Directory ownership rules (i.e. just a GitHub user, group or email) are prepended
+//     with the CO files path absolute to the root: "@org/user" becomes
+//     "/path/to/dir @org/user"
+//   - File and glob ownership rules have the CO file path prepended to the file:
+//     "main.go @org/user" becomes "/path/to/dir/main.go @org/user"
+func rewriteCodeownersRule(rewrittenPath, rule string) (string, error) {
+	if isDirRule(rule) {
+		return rewriteDirRule(rewrittenPath, rule), nil
+	} else {
+		return rewriteNonDirRule(rewrittenPath, rule), nil
+	}
+}
+
 // isDirRule checks whether a CO rule concerns a directory. This is the
 // standard case, it is assumed when the first token of the rule contains an "@"
 // (as codeowners can only be GitHub groups or users or email addresses).
@@ -184,8 +246,8 @@ func isDirRule(rule string) bool {
 }
 
 func rewriteDirRule(path, rule string) string {
-	// Edge case: If the path is "/.", i.e. we are processing a CO file in the
-	// repo root the path should be a glob according to the CODEOWNERS syntax
+	// Edge case: If the path is "/.", i.e. we are processing a CO file in
+	// root the path should be a glob according to the CODEOWNERS syntax
 	// https://docs.github.com/en/github/creating-cloning-and-archiving-repositories/creating-a-repository-on-github/about-code-owners#codeowners-syntax
 	if path == "/." {
 		path = "*"
@@ -207,7 +269,32 @@ func rewriteNonDirRule(path, rule string) string {
 	return fmt.Sprintf("%s %s", path, rule)
 }
 
-func generateCodeownersFile(rules []string) string {
+func GenerateCodeownersFile(rules []string) string {
 	body := strings.Join(rules, "\n")
 	return fmt.Sprintf("%s\n\n%s\n", generatedFileWarning, body)
+}
+
+// stringQueue is the queue for BFS traversal
+type stringQueue interface {
+	Enqueue(s string)
+	Dequeue() string
+	Len() int
+}
+
+type stringQueueImpl struct {
+	*list.List
+}
+
+func (q *stringQueueImpl) Enqueue(s string) {
+	q.PushBack(s)
+}
+
+func (q *stringQueueImpl) Dequeue() string {
+	elem := q.Front()
+	q.Remove(elem)
+	return elem.Value.(string)
+}
+
+func newStringQueue() stringQueue {
+	return &stringQueueImpl{list.New()}
 }
