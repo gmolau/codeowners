@@ -61,8 +61,8 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v2
       - name: Update CODEOWNERS file
-        uses: ./
-      - name: Commit CODEOWNERS file
+        uses: gmolau/codeowners@v0.1.1
+    - name: Commit CODEOWNERS file
         uses: EndBug/add-and-commit@v7
         with:
           message: Update CODEOWNERS file (CODEOWNERS Bot)
