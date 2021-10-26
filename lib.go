@@ -61,6 +61,10 @@ func RewriteCodeownersRules(path string) ([]string, error) {
 		return nil
 	})
 
+	if err != nil {
+		return nil, fmt.Errorf("error while processing CODEOWNERS files: %w", err)
+	}
+
 	return rewrittenRules, nil
 }
 
