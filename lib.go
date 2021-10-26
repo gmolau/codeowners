@@ -52,7 +52,7 @@ func RewriteCodeownersRules(path string) ([]string, error) {
 	var rewrittenRules []string
 
 	err = walkCodeownersFiles(root, func(coPath string) error {
-		rules, procErr := processCodeownersFile(path, coPath)
+		rules, procErr := processCodeownersFile(root, coPath)
 		if procErr != nil {
 			return procErr
 		}
@@ -60,6 +60,10 @@ func RewriteCodeownersRules(path string) ([]string, error) {
 		rewrittenRules = append(rewrittenRules, rules...)
 		return nil
 	})
+
+	if err != nil {
+		return nil, fmt.Errorf("error while processing CODEOWNERS files: %w", err)
+	}
 
 	return rewrittenRules, nil
 }
