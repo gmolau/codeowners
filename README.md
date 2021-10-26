@@ -6,7 +6,7 @@ Tool to generate a [GitHub CODEOWNERS file](https://docs.github.com/en/repositor
 
 By default, GitHub expects one `CODEOWNERS` file in the repos `.github` dir like this:
 
-```
+```gitignore
 # File: .github/CODEOWNERS
 
 * @org/admin-user
