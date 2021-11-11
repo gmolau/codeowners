@@ -45,7 +45,7 @@ Install as a Go tool via `go get github.com/gmolau/codeowners`.
 For maximum convenience it is recommended to run this tool automatically in a GitHub Action like this:
 
 ```yaml
-# File: .github/workflows/CODEOWNERS.yaml
+# File: .github/workflows/codeowners.yaml
 
 name: Update CODEOWNERS
 on:
@@ -61,7 +61,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v2
       - name: Update CODEOWNERS file
-        uses: gmolau/codeowners@v0.1.2
+        uses: gmolau/codeowners@v0.1.3
     - name: Commit CODEOWNERS file
         uses: EndBug/add-and-commit@v7
         with:
